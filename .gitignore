@@ -1,0 +1,18 @@
+# Virtual environment - never commit this, it's hundreds of MB of
+# installed libraries that anyone can recreate from requirements.txt
+.venv/
+venv/
+env/
+
+# Python's compiled bytecode cache - generated automatically, not source code
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables / secrets (you'll need this later for the GitHub webhook secret)
+.env
+
+# Editor and OS junk
+.vscode/
+.idea/
+.DS_Store
