@@ -1,15 +1,52 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+import hashlib
+import hmac
+import json
+import os
+
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 
 #keeps track of who is connected to each webhook id
 rooms = {}
 
+#secret shared with GitHub, set in the webhook config on GitHub's side too.
+#refuse to start without it, otherwise a missing env var would silently turn
+#off auth and let anyone who knows the url trigger deploys
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+if not WEBHOOK_SECRET:
+    raise RuntimeError("WEBHOOK_SECRET is not set")
+
+
+def verify_signature(body: bytes, signature_header: str | None):
+    #x-hub-signature-256 is the one that proves the payload really came from
+    #github: it's an hmac-sha256 of the raw body keyed with our shared secret,
+    #so only someone who knows the secret could have produced it. the older
+    #x-hub-signature (sha1) is weaker and only kept for backwards compatibility
+    if signature_header is None:
+        raise HTTPException(status_code=401, detail="missing x-hub-signature-256 header")
+
+    expected = "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+    #compare_digest avoids leaking timing info about how much of the signature matched
+    if not hmac.compare_digest(expected, signature_header):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+
 #this runs when someone sends data to /webhook
 @app.post("/webhook/{webhook_id}")
-async def webhook(request: Request, webhook_id: str):
+async def webhook(
+    request: Request,
+    webhook_id: str,
+    x_hub_signature_256: str | None = Header(default=None),
+):
+    #read the raw bytes first since the signature is computed over the raw
+    #body, not the re-serialized json
+    body = await request.body()
+    verify_signature(body, x_hub_signature_256)
+
     #grab the data that was sent
-    payload = await request.json()
+    payload = json.loads(body)
 
     #makes an empty list to store anyone who disconnected
     dead_users = []
