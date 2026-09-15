@@ -10,25 +10,23 @@ app = FastAPI()
 #keeps track of who is connected to each webhook id
 rooms = {}
 
-#secret shared with GitHub, set in the webhook config on GitHub's side too.
-#refuse to start without it, otherwise a missing env var would silently turn
-#off auth and let anyone who knows the url trigger deploys
+#the secret we share with github, same one thats in the webhook settings
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+
+#stop the server from starting if its missing so auth cant accidentally be off
 if not WEBHOOK_SECRET:
     raise RuntimeError("WEBHOOK_SECRET is not set")
 
 
 def verify_signature(body: bytes, signature_header: str | None):
-    #x-hub-signature-256 is the one that proves the payload really came from
-    #github: it's an hmac-sha256 of the raw body keyed with our shared secret,
-    #so only someone who knows the secret could have produced it. the older
-    #x-hub-signature (sha1) is weaker and only kept for backwards compatibility
+    #if theres no header then it didnt come from github
     if signature_header is None:
         raise HTTPException(status_code=401, detail="missing x-hub-signature-256 header")
 
+    #github hashes the body with the secret, so we do the same and compare
     expected = "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
 
-    #compare_digest avoids leaking timing info about how much of the signature matched
+    #compare_digest instead of == so the timing doesnt give anything away
     if not hmac.compare_digest(expected, signature_header):
         raise HTTPException(status_code=401, detail="invalid signature")
 
@@ -40,8 +38,7 @@ async def webhook(
     webhook_id: str,
     x_hub_signature_256: str | None = Header(default=None),
 ):
-    #read the raw bytes first since the signature is computed over the raw
-    #body, not the re-serialized json
+    #check the raw bytes, parsing it first would change the hash
     body = await request.body()
     verify_signature(body, x_hub_signature_256)
 
