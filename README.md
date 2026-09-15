@@ -40,6 +40,16 @@ source ./.venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+You also need a `.env` file with the webhook secret in it. This is the same
+secret you set in the webhook settings on GitHub.
+
+```bash
+echo "WEBHOOK_SECRET=pick_something_here" > .env
+```
+
+The server won't start without it. Don't commit this file, it's already in
+.gitignore.
+
 ## Running it
 
 ```bash
@@ -68,13 +78,17 @@ websocat ws://127.0.0.1:5000/tunnel/asdf
 
 It'll look like nothing happened. That's normal, it's just waiting.
 
-Second one sends:
+Second one sends. Requests have to be signed now, so build the signature first
+using whatever secret you put in your `.env`:
 
 ```bash
+BODY='{"ref":"refs/heads/main","repository":{"name":"test-repo"}}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "pick_something_here" | awk '{print $2}')"
+
 curl -X POST http://localhost:5000/webhook/asdf \
   -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -d '{"ref": "refs/heads/main", "repository": {"name": "test-repo"}}'
+  -H "X-Hub-Signature-256: $SIG" \
+  -d "$BODY"
 ```
 
 The first terminal should print out the json, and the second one should say
@@ -83,7 +97,22 @@ The first terminal should print out the json, and the second one should say
 If it says `users_notified: 0` nobody was listening on that id, so check you
 used the same one in both.
 
+If you get a 401 back, the signature didn't match. Check that the secret in the
+openssl command is the same one that's in your `.env`.
+
+## Authentication
+
+GitHub signs every webhook it sends with the secret you configure on its side.
+It puts the result in an `x-hub-signature-256` header, which is an HMAC-SHA256
+of the raw request body. Since only someone who knows the secret could produce
+that value, checking it proves the request really came from GitHub.
+
+smee2 recalculates the signature on every request and rejects anything that
+doesn't match with a 401. Without this, anyone who found out the URL could
+trigger deploys.
+
 ## Endpoints
 
-- `POST /webhook/{id}` sends json to everyone listening on that id
+- `POST /webhook/{id}` sends json to everyone listening on that id, if the
+  signature is valid
 - `WebSocket /tunnel/{id}` connect here to get stuff sent to that id

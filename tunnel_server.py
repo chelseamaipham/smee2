@@ -1,15 +1,49 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+import hashlib
+import hmac
+import json
+import os
+
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 
 #keeps track of who is connected to each webhook id
 rooms = {}
 
+#the secret we share with github, same one thats in the webhook settings
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+
+#stop the server from starting if its missing so auth cant accidentally be off
+if not WEBHOOK_SECRET:
+    raise RuntimeError("WEBHOOK_SECRET is not set")
+
+
+def verify_signature(body: bytes, signature_header: str | None):
+    #if theres no header then it didnt come from github
+    if signature_header is None:
+        raise HTTPException(status_code=401, detail="missing x-hub-signature-256 header")
+
+    #github hashes the body with the secret, so we do the same and compare
+    expected = "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+    #compare_digest instead of == so the timing doesnt give anything away
+    if not hmac.compare_digest(expected, signature_header):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+
 #this runs when someone sends data to /webhook
 @app.post("/webhook/{webhook_id}")
-async def webhook(request: Request, webhook_id: str):
+async def webhook(
+    request: Request,
+    webhook_id: str,
+    x_hub_signature_256: str | None = Header(default=None),
+):
+    #check the raw bytes, parsing it first would change the hash
+    body = await request.body()
+    verify_signature(body, x_hub_signature_256)
+
     #grab the data that was sent
-    payload = await request.json()
+    payload = json.loads(body)
 
     #makes an empty list to store anyone who disconnected
     dead_users = []
